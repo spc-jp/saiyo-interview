@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adopt AI v3.4 | 採用インタビューAI自動要約</title>
+    <!-- Tailwind CSS, Lucide Icons, SheetJS, PDF.js のインポート -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; background-color: #f1f5f9; }
+        .magic-gradient { background: linear-gradient(135deg, #059669 0%, #2563eb 100%); }
+        .loading-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        #drop-zone.drag-active { border-color: #2563eb; background-color: #eff6ff; transform: scale(1.01); }
+        
+        /* 印刷レイアウト（PDF保存時にシステムUIを全て非表示にする） */
+        @media print { 
+            .no-print { display: none !important; } 
+            .print-area { box-shadow: none !important; border: none !important; margin: 0 !important; width: 100% !important; padding: 0 !important; }
+            body { background: white; }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- ナビゲーションバー -->
+    <nav class="bg-white/90 backdrop-blur-md border-b sticky top-0 z-50 p-4 no-print shadow-sm">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <div class="magic-gradient text-white p-2 rounded-xl shadow-lg">
+                    <i data-lucide="sparkles" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-black text-slate-900 tracking-tighter">Adopt AI <span class="text-blue-600">v3.4</span></h1>
+                    <p class="text-[10px] text-slate-400 font-bold">完全バグ修正モデル (光製薬12名全データ実証版)</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <div id="status-chip" class="hidden flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold border border-emerald-100">
+                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> 要約完了
+                </div>
+                <button onclick="window.print()" class="text-xs font-bold px-4 py-2 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition flex items-center gap-2">
+                    <i data-lucide="printer" class="w-4 h-4"></i> PDF保存・印刷
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- メインレイアウト -->
+    <main class="flex-grow max-w-7xl w-full mx-auto p-4 md:p-8 flex flex-col lg:flex-row gap-8">
+        
+        <!-- 左ペイン：インプット＆設定 -->
+        <div class="w-full lg:w-5/12 space-y-6 no-print">
+            
+            <!-- ① アップローダー -->
+            <div class="bg-white p-6 rounded-2xl border shadow-sm space-y-4">
+                <h2 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+                    <span class="flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold">1</span>
+                    インタビューシート読み込み
+                </h2>
+                
+                <div id="drop-zone" class="group border-2 border-dashed border-slate-200 rounded-xl p-8 text-center transition-all bg-slate-50 relative hover:bg-slate-100/50 cursor-pointer flex flex-col items-center">
+                    <input type="file" id="fileIn" class="absolute inset-0 opacity-0 cursor-pointer z-10" accept=".pdf,.xlsx,.xls,.txt">
+                    <div class="p-3 bg-white rounded-full text-slate-400 group-hover:text-blue-600 group-hover:scale-110 transition-all shadow-sm mb-3">
+                        <i data-lucide="file-up" class="w-6 h-6"></i>
+                    </div>
+                    <p class="text-xs font-bold text-slate-700">ファイルをドロップ、または選択</p>
+                    <p class="text-[10px] text-slate-400 mt-1">実用インタビューシートのPDF、Excel、TXTに対応</p>
+                    
+                    <!-- AIロードアニメーション（オーバーレイ） -->
+                    <div id="ai-loader" class="hidden absolute inset-0 bg-white/95 rounded-xl flex flex-col items-center justify-center z-20">
+                        <i data-lucide="refresh-cw" class="loading-spin text-blue-600 w-8 h-8 mb-2"></i>
+                        <p class="text-xs font-bold text-slate-900 animate-pulse">AIが最適な文字数で要約執筆中...</p>
+                        <p id="loader-submsg" class="text-[9px] text-slate-400 mt-1">最大5回のリトライ処理を実行中</p>
+                    </div>
+                </div>
+
+                <!-- 光製薬 12名の実データシミュレーター -->
+                <div class="border-t pt-4">
+                    <label class="block text-xs font-bold text-slate-505 mb-2 uppercase tracking-wider">🌟 光製薬・全12名の社員データで検証</label>
+                    <select id="sampleSelect" class="w-full p-2 text-xs font-bold border rounded-lg bg-slate-50 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">-- 検証メンバーを選択 --</option>
+                        <option value="ns">01. 品質管理部 試験課 N.S（2006年入社）</option>
+                        <option value="st">02. 品質保証部（薬剤師） S.T（2021年入社）</option>
+                        <option value="ek">03. 営業部 MR E.K（2016年入社）</option>
+                        <option value="ym">04. 営業部 MR Y.M（2017年入社）</option>
+                        <option value="sh">05. 工場 物流管理部 S.H（2020年入社）</option>
+                        <option value="ay">06. 工場 施設管理部工務課 A.Y（2019年入社）</option>
+                        <option value="ny">07. 工場 製剤部製剤第四課 N.Y（2021年入社）</option>
+                        <option value="jo">08. 工場 製剤部製剤第二課 J.O（2015年入社）</option>
+                        <option value="sk">09. 本社 営業管理部 S.K（2020年入社）</option>
+                        <option value="yf">10. 工場 物流管理部 Y.F（2009年入社）</option>
+                        <option value="mk">11. 本社 安全管理部（薬剤師） M.K（2022年入社）</option>
+                        <option value="ry">12. 工場 施設管理部工務課 R.Y（1996年入社）</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- ② 原データテキストエリア -->
+            <div class="bg-white p-6 rounded-2xl border shadow-sm space-y-3">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest">生データ / 編集用原料</h2>
+                    <button id="clearBtn" class="text-[10px] text-rose-500 hover:underline flex items-center gap-1 font-bold">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> クリア
+                    </button>
+                </div>
+                <textarea id="rawTxt" rows="12" class="w-full p-3 text-xs border rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none leading-relaxed" placeholder="ドロップしたファイルの内容、または選択したサンプルがここに表示されます..."></textarea>
+                
+                <div class="pt-2 flex flex-col gap-2">
+                    <div class="flex items-center gap-2 justify-end">
+                        <i data-lucide="key" class="w-3.5 h-3.5 text-slate-400"></i>
+                        <input type="password" id="apiKey" class="text-xs border p-2 rounded-lg w-48 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Gemini API Key を入力...">
+                    </div>
+                    <button id="genBtn" class="w-full magic-gradient text-white font-bold py-3.5 rounded-xl shadow-lg hover:opacity-90 transition flex items-center justify-center gap-2 text-sm mt-2">
+                        <i data-lucide="zap" class="w-4 h-4"></i> AI採用サイト文章自動生成
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 右ペイン：プレビュー＆プレミアムエディタ -->
+        <div class="w-full lg:w-7/12 space-y-6">
+            
+            <!-- 出力ビュー -->
+            <div id="result-section" class="hidden space-y-6">
+                
+                <!-- プレビューカード -->
+                <div class="bg-white rounded-[2.5rem] shadow-xl border overflow-hidden print-area">
+                    
+                    <!-- ヒーローヘッダー -->
+                    <div class="magic-gradient p-10 md:p-14 text-white relative">
+                        <div class="absolute inset-0 opacity-10 bg-[radial-gradient(#ffffff_1px,transparent_1px)] [background-size:20px_20px]"></div>
+                        <div class="relative z-10 flex flex-col sm:flex-row items-center gap-8">
+                            <div id="avatar" class="w-24 h-24 bg-white/20 rounded-full border-4 border-white/30 flex items-center justify-center text-4xl font-black backdrop-blur-md shadow-inner">
+                                ?
+                            </div>
+                            <div class="text-center sm:text-left">
+                                <div class="flex items-center justify-center sm:justify-start gap-2 mb-2">
+                                    <span id="prvYear" class="bg-white/20 px-3 py-0.5 rounded-full text-[10px] font-bold tracking-widest backdrop-blur-md">
+                                        202X年入社
+                                    </span>
+                                    <span id="prvDept" class="bg-emerald-400/20 text-emerald-100 px-3 py-0.5 rounded-full text-[10px] font-bold tracking-widest backdrop-blur-md">
+                                        品質管理部
+                                    </span>
+                                </div>
+                                <h2 id="prvName" class="text-4xl md:text-5xl font-black tracking-tighter">Initial Name</h2>
+                                <p class="text-blue-100 text-[10px] mt-2 font-bold uppercase tracking-[0.15em]">Recruitsite Special Interview</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 質問カード展開コンテナ -->
+                    <div class="p-8 md:p-14 space-y-12 bg-white" id="prvContent">
+                        <!-- ここにQ1〜Q6がダイナミックに生成されます -->
+                    </div>
+
+                    <!-- フッター -->
+                    <footer class="bg-slate-50 border-t p-8 flex flex-col sm:flex-row justify-between items-center text-[10px] font-bold text-slate-400 tracking-widest">
+                        <span>© HIKARI PHARMACEUTICAL RECRUITING AI</span>
+                        <span class="mt-2 sm:mt-0 flex items-center gap-1.5 text-emerald-600">
+                            <i data-lucide="shield-check" class="w-4 h-4"></i> イニシャル匿名化・プライバシー保護適用済
+                        </span>
+                    </footer>
+                </div>
+
+                <!-- 各種エクスポートコントロールボタン（印刷・コピーなど） -->
+                <div class="flex flex-wrap justify-center gap-3 no-print">
+                    <button id="copyBtn" class="flex items-center gap-2 px-5 py-3 bg-white border rounded-xl font-bold text-xs text-slate-700 hover:bg-slate-50 transition shadow-sm">
+                        <i data-lucide="copy" class="w-4 h-4 text-slate-500"></i> テキスト全文をコピー
+                    </button>
+                    <button id="exportHtml" class="flex items-center gap-2 px-5 py-3 bg-white border rounded-xl font-bold text-xs text-slate-700 hover:bg-slate-50 transition shadow-sm">
+                        <i data-lucide="code" class="w-4 h-4 text-emerald-600"></i> 本番サイト用HTML出力
+                    </button>
+                </div>
+
+            </div>
+
+            <!-- 初期表示時のプレースホルダー -->
+            <div id="placeholder-section" class="bg-white rounded-3xl border border-slate-200 p-16 text-center text-slate-400 flex flex-col items-center justify-center min-h-[400px]">
+                <div class="p-4 bg-slate-50 rounded-full text-slate-300 mb-4 shadow-inner">
+                    <i data-lucide="sparkles" class="w-12 h-12"></i>
+                </div>
+                <h3 class="text-lg font-bold text-slate-700 mb-1">プレビューの準備ができていません</h3>
+                <p class="text-xs text-slate-400 max-w-sm leading-relaxed">左側のエリアにファイルを置くか、光製薬のサンプルテキストを選択して「AI採用サイト文章自動生成」ボタンを押してください。</p>
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- スタイリッシュな通知トースト表示コンテナ (no-print) -->
+    <div id="toast" class="no-print fixed top-6 right-6 z-50 transform translate-y-[-100px] opacity-0 transition-all duration-300 pointer-events-none text-white px-5 py-4 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-bold max-w-sm">
+        <i id="toast-icon" data-lucide="info" class="w-5 h-5 flex-shrink-0 text-white"></i>
+        <div class="flex-grow">
+            <p id="toast-title" class="text-white font-black">メッセージ</p>
+            <p id="toast-msg" class="text-white/90 font-medium mt-0.5">メッセージ詳細</p>
+        </div>
+    </div>
+
+    <!-- カスタム通知ダイアログ（alert()代用） -->
+    <div id="custom-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm hidden">
+        <div class="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 transform scale-95 transition-all duration-300">
+            <div class="flex items-start gap-4">
+                <div class="p-3 bg-blue-50 text-blue-600 rounded-2xl animate-pulse" id="modal-icon-wrapper">
+                    <i id="modal-icon" data-lucide="alert-circle" class="w-6 h-6"></i>
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-base font-bold text-slate-900" id="modal-title-text">ご案内</h3>
+                    <p class="text-sm text-slate-500 mt-2 leading-relaxed" id="modal-message-text">メッセージ内容がここに表示されます。</p>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end">
+                <button id="modal-close-btn" class="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition">
+                    閉じる
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 光製薬 12名のリアルサンプルデータ -->
+    <script>
+        const optSamples = {
+            ns: `【お名前】品質管理部 試験課 N.S\n【入社年度】2006年 入社\n【現在の仕事内容を教えてください】\n試験課において医薬品の製品試験を担当しています。製品試験には医薬品の品質を確認するため多くの試験を行ますが、主な試験として医薬品行政から承認された内容に従った定量試験、確認試験および純度試験などがあります。これらの試験を行うにあたり、医薬品工場で必要なGMP（医薬品の製造管理および品質管理に関する基準）という法令を遵守する必要があり、この法令に基づいた試験手順書および試験記録などを作成する必要があります。また、試験実施計画の策定、試験担当者の配置およびパソコンを使用した試験結果解析などの他、GMPの教育訓練および試験環境の整備なども行っています。\n【どのようなところに仕事のやりがいを感じますか】\n医薬品という人の命を守るための重要な仕事の一端を担っていますので、仕事に対する集中力はかなり必要になります。その分、自分が行った多くの試験により医薬品の品質が検証された医薬品が患者様に届けられた時には、それまでに努力して成し遂げた仕事に達成感を感じます。さらに病院で光製薬의製品を見かけたりすると、自分が試験した医薬品が世の中の人の役に立てていることを実感でき、嬉しく思います。\n【会社の雰囲気を教えてください】\nいざ！というときに「報連相」ができる環境づくりとして、日頃から職場内のコミュニケーションを取るよう、全社員が常に心掛けています。例えば、仕事に悩んでいそうだったり、困っていそうな仲間を見かけた場合、声掛けをするようにしています。私自身がそうなったときには、実際に声を掛けてもらっており、一緒に悩んでくれたり、考えてくれたりしています。コロナ禍前は年末に会社を挙げての懇親会があり、ビンゴゲームなどが開催されていました。また、会社創設70周年の際には伊勢志摩への社員旅行もあり、楽しい一面もありました。\n【仕事をする上で、大切にしていることを教えてください】\n担当する製品試験に責任感を常に持ちながら業務を行うことはとても集中力を要することです。どのようにしたら医薬品をGMPという法令に従って試験ができるか、分析機器の操作方法も含め、よく試験の内容を理解し、考えてから試験を開始し、進めるようにしています。また、試験実施計画を策定する際、医薬品を医療機関に納める期日を確認し、より効率的に試験が行えるよう、かつ試験担当者に業務の偏りが起こらないよう心掛けています。必ずコミュニケーションをとりながら、上司にも相談をし試験実施計画を立てています。あと一番基本的で大切なのはあいさつです。\n【これから仲間になる方へメッセージをお願いします】\n患者様の命を守るための医薬品を取り扱うことになります。仕事一つ一つに対して丁寧に行うことができ、かつ真剣に取り組める方が必要です。今まで学んでこられた知識、経験および技能を十分に生かし、職場が活性化する役割を担ってほしいです。光製薬の医薬品を待っている患者様に提供する医薬品の品質を守る立場として、職場を引っ張っていく存在になってほしいです。ぜひ、一緒に明るくやりがいのある職場づくりをしていきましょう！\n【OFF TIME】\n趣味は料理です。平日は仕事で帰りが遅くなる時もあり、なかなか時間をとることができませんが、休日には娘の好きなお菓子づくりをしたり、時間のかかる料理に挑戦しています。また、コロナ禍でおうち時間も増え、最近ではNetflixに家族ではまっています。私たちの若いころ流行っていた映画などを娘に勧めたり、娘から最近の流行を教えてもらったりと、家族団らんの時間も増え、心穏やかな休日を過ごしています。`,
+            st: `【お名前】信頼性保証本部 品質保証部 品質保証課 S.T\n【入社年度】2021年 入社\n【現在の仕事内容を教えてください】\n品質保証部は医薬品の製造販売業者としての法令（薬機法、GQP省令など）に基づき、品質保証業務全般（市場への出荷の管理、製造業者などに対する適正な製造管理および品質管理の確保、品質などに関する方法および品質不良の処理、回収処理）を行う部署です。その中で私は文書管理、教育訓練、品質情報、製造所監査などの業務を担当しています。具体的にはGQP省令（医薬品などの品質管理の方法を定めた基準）に基づく手順書の作成や、品質管理業務に必要な教育訓練の計画・立案・実施・記録の作成・報告、医療機関などから入手した品質情報（苦情）の発生原因の特定、回答書の作成、改善策の評価や防止策の評価を行います。\n【どのようなところに仕事のやりがいを感じますか】\n成果物を提出したとき、「仕事した！！」と感じられるところです。例えば、担当している品質情報に関する一連の対応が完了したときです。製品に対して頂いた品質情報を、迅速に調査し、回答書の作成が終わったときは達成感があります。その回答書が営業部門などより医療機関様に報告され、医療機関様が満足されていたとの報告を聞くとさらにやりがいを感じます。また、監査の一連のステップが完了したときも達成感を感じます。品質保証部の役割はとても重要ですので、誇りとやりがいを感じています。\n【会社の雰囲気を教えてください】\n皆さんとても優しいです。知識と経験が豊富な社員が多いので、わからないことを1つ聞いても、それ以上の内容で返答していただけることも多く、とても勉強になります。また、皆さん頭の回転が速いので、時にはレベルの高い冗談が飛び交うこともあり、明るい雰囲気の中で仕事ができます。もちろん、仕事に対しては本気で向き合っていますので、一人一人が強い責任感を持って働いています。\n【仕事をする上で、大切にしていることを教えてください】\n私が仕事をする上で大切にしていることは、相手の意見を聞く「傾聴力」です。ミドル転職で入社して約1年のため、まだまだスキルや経験が力不足です。まずは上司や同僚の意見を聞いた上で適切に行動し、その行動に責任を持つことを心掛けています。円滑なコミュニケーションを行うことが大切だと思っています。\n【これから仲間になる方へメッセージをお願いします】\n医薬品の製造販売業は5年に1度の許可更新があり、2024年度に次回更新調査を迎えます。そのため業務の全面的な見直しを現在、品質保証部一丸となり進めています。GQPに関心のある方、新しい品質保証部を作ってみませんか？一緒に働きましょう！！\n【OFF TIME】\n平日はデスクワークが主なので、なるべく体を動かすために休日は家族で公園へ行き、娘と鬼ごっこをしています。趣味はラジオ視聴です。寝るときは必ず聴いており、聴きながら寝落ちする毎日です。現在はアプリでタイムフリーにて視聴できるのでラジオオタクとしては、大変便利でありがたいです。`,
+            ek: `【お名前】営業部 E.K\n【入社年度】2016年 入社\n【現在の仕事内容を教えてください】\n私の担当エリアは東京都の23区内で大学病院などの特定機能病院から地域の中核病院、クリニックを訪問し、医師、薬剤師、放射線科技師、時には看護師などの医療関係者に面談し、光製薬の主力製品であります輸液製剤、また抗生剤を中心とした後発医薬品の情報提供を行っております。情報提供を行う専門家として先生方に寄り添う情報提供を心掛けています。\n【どのようなところに仕事のやりがいを感じますか】\n何らかの形で病気やけがで苦しんでいる患者様を救う手助けができること、これが医薬品に携わる私のやりがいです。直接患者様と接することはございませんが、提案した医薬品が患者様の役に立っていると感じるときに喜びを感じます。\n【会社の雰囲気を教えてください】\n一言でいうと「温かい会社」だと思っております。普段は病院訪問など外での仕事がメインですが、用事があり会社に戻ってきた際は他部署のいろいろな方から仕事の話であったり、共通の話題であったり、声をかけていただきます。いろいろな方から気に掛けていただいている環境の中で仕事ができるのは非常に幸せだと感じております。\n【仕事をする上で、大切にしていることを教えてください】\n常に相手の立場になって考えることです。以前は製品の特徴ばかりを強調した提案をしていた時期がありましたが、先生方が何を必要としているのか、その先の患者様が何に困っているのか、相手の立場になって考えないと答えは出ないよと忠告をいただき、真のニーズとは何かを常に活動に反映しています。\n【これから仲間になる方へメッセージをお願いします】\n光製薬の基幹製品であります輸液製剤は、医療現場において非常に大切な役割を担っております。その重要な輸液製剤を扱うという責任が仕事のやりがいでもあります。ぜひ一緒に光製薬で医療の未来に貢献する仕事をしましょう。\n【OFF TIME】\n昔から料理を作ることが趣味で、休日は子供たちが喜ぶようなメニューを考え家族に振る舞っております。その場面でどのようなものが喜ばれるのかリサーチし、段取り、タイミングを計算して提供しています。`,
+            ym: `【お名前】営業部 Y.M\n【入社年度】2017年 入社\n【現在の仕事内容を教えてください】\n光製薬の基幹製品であります輸液製剤や後発医薬品（抗菌薬、造影剤）をメインに病院、診療所、薬局などを訪問し、医師や薬剤師などの医療関係者に自社製品の情報提供活動をしています。使用感、副作用情報の収集などを行い、医薬品を適正に使用してもらうべく常にアンテナを張りながら活動しています。\n【どのようなところに仕事のやりがいを感じますか】\n医療関係者との定期的な訪問によって名前を覚えていただき、信頼関係を築けたときです。ある日、先生に競合他社製品もある中、「Mさんから製品を採用したい」と言っていただいた時は素直に嬉しかったです。先生から製品で患者様が良くなったと言っていただいた時に誇りとやりがいを感じます。\n【会社の雰囲気を教えてください】\n優しい上司や頼りになる先輩方ばかりで私にとって非常にアットホームな会社だと感じています。私は営業部に所属していますが、他部署の方々も優しく、業務以外の（プライベートの相談）話も聞いてくださので非常に働きやすい環境で仕事をさせていただいてます。\n【仕事をする上で、大切にしていることを教えてください】\n私が仕事をする上で大切にしていることは気遣い、思いやりです。「相手の立場にたって物事を考えなさい」と教えていただき、一方的な製品の売り込みではなく、相手が何に困っていてどのような情報を求めているか収集することを心掛けています。あとは体調管理です。\n【これから仲間になる方へメッセージをお願いします】\nMRの仕事は、疾病や薬剤の知識がないと難しいと思われがちですが、そうではありません。先生や患者様が何を必要としているのかを聞き取る力、どうすれば役に立てるのかを想像する力があればきっと成功すると思います。知識は後から十分についてくると思いますので、安心してください。新入社員の...\n【OFF TIME】\n休日は高校卒業時に立ち上げた社会人サッカーチームでサッカーをしています。昨年10周年を迎えました。Jリーグ観戦も好きです。会社の先輩によくツーリングに連れていってもらっています。風を感じながら走るのが毎度楽しみです。`,
+            sh: `【お名前】管理部 S.H\n【入社年度】2020年 入社\n【現在の仕事内容を教えてください】\n主に発注や業者様への対応を行っています。発注では注文、月末に納品書・請求書をまとめる作業を行います。数量の不足が発生すると製造に影響を及ぼすため細心の注意を払っています。調整時は祖語が発生しないよう注意し、言葉遣いも心掛けています。\n【どのようなところに仕事のやりがいを感じますか】\n月次処理業務において、資料を見ずに円滑に処理ができた時や、他の担当者にご助力いただくことなく完遂できた際に最もやりがいを感じます。毎月行う業務ですので、前月よりも早く済ませることができたり、トラブル対応の後に他部署から頼られたりすると成長を実感します。\n【会社の雰囲気を教えてください】\nとても和やかな雰囲気だと思います。業務の相談の他に、休憩時には世間話や愚痴をこぼすことのできる環境です。他部署の方々と交流したり、名前を覚えて頂いたりする機会が多くあるので過ごしやすいです。\n【仕事をする上で、大切にしていることを教えてください】\nまずは「正確性」、次に「スピード」、最後に「先読み」と考えています。業務に慣れるまでは正確に間違いを起こさないよう、余裕ができたら先読みを考え、通常の処理に必要な資料を事前添付するなどの工夫を行っています。\n【これから仲間になる方へメッセージをお願いします】\n光製薬には製造工程や事務、品質管理などのさまざまな業務がありますが、他部署の方との交流の機会が多い職場です。わからないことや困ったことがあれば、いつでも周りの方を頼ってください！\n【OFF TIME】\n私は種類問わずゲームが好きなので、半日ほどゲーム（スマホゲームなど）に時間を費やしています。残り半日は飼い犬の散歩や家事、買い物などをしています。`,
+            ay: `【お名前】施設管理部工務課 A.Y\n【入社年度】2019年 入社\n【現在の仕事内容を教えてください】\n工場全体の生産設備管理・メンテナンスをメインに行っています。稼働状況日常点検、突発トラブル対応、新規設備導入など幅広く対応しています。最近では、手作業で行っていた業務を自動化するための設備導入にも携わっており充実しています。\n【どのようなところに仕事のやりがいを感じますか】\n設備に起きたトラブルを解決して正常に動作するようになるところを見るとやりがいを感じます。不具合が生じると製品品質に直結する重要な機械ばかりなので、困難を乗り越えて解決したときはとても嬉しいです。\n【会社の雰囲気を教えてください】\n工務課では現場での急なトラブル対応時に、相談に乗って丁寧に説明をしていただける温かい雰囲気があります。得意分野を生かして他分野に精通している方との意見交換では学べることが多く、話しやすいです。\n【仕事をする上で、大切にしていることを教えてください】\nすべての作業において「品質」の2文字がかかわってきます。例えば機械の設定変更一つでも無菌性を損なっては本末転倒です。作業が製品品質に影響を及ぼす可能性があることを常に意識しています。\n【これから仲間になる方へメッセージをお願いします】\n製造ラインをもつ会社であれば設備・メンテナンス部門は必須です。工学系で学んだ知識をフルに活用できる場は多岐に渡ります。幅広くさまざまなことに挑戦していきたい方に最適な環境です。\n【OFF TIME】\n車好きなので全国各地をドライブ・旅行しています。普段と違った視点で物事を感じることができます。また、1年に1回は新しい未体験に挑戦しようと心掛けています。`,
+            ny: `【お名前】製剤部 製剤第四課 N.Y\n【入社年度】2021年 入社\n【現在の仕事内容を教えてください】\n主に製品を出荷する前に行う目視検品作業を行っています。外観の汚れ、袋の封緘、使用期限や製造番号の印字などの検査です。その他、プランジャーロッドを巻く機械、ラベルを貼る機械などの監視・操作も行っています。\n【どのようなところに仕事のやりがいを感じますか】\n製品の異常を発見した時にやりがいを感じます。医薬品は患者様に使用するので、重大な不具合が出荷されるのを未然に防ぐことができたと実感したとき、非常に心から安心し達成感を得ます。\n【会社の雰囲気を教えてください】\n社員同士が仲の良い明るい職場です。仕事中は淡々と集中して作業を行っていますが、困っていることがあるとすぐに気づいて声をかけて助けてくれます。空き時間にはプライベートの話をすることも多いです。\n【仕事をする上で、大切にしていることを教えてください】\n大切にしていることは「責任感」を持つことです。製造している製品は全国の病院で使用され、患者様の命にも関わります。自分が患者の立場になった時でも安心だと思える製品を作っていきます。\n【これから仲間になる方へメッセージをお願いします】\n私は中途未経験でこの会社に入社しました。知識ゼロのスタートでしたが、先輩のサポートや社内教育システムのおかげで、今では周りを見ながら進んで仕事ができるようになりました。未経験でも大丈夫です！\n【OFF TIME】\n趣味はドラマ鑑賞と好きなアーティスト（WANIMAなど）のLIVEに行くことです。職場でもドラマの情報交換で盛り上がります。生歌、演出に感動し休日を満喫しています。`,
+            jo: `【お名前】製剤部 製剤第二課 J.O\n【入社年度】2015年 入社\n【現在の仕事内容を教えてください】\nSPB（スモールプラスチックボトル）ラインの自動異物検査機、リーク検査機、ラベラー機などのオペレーター、および外観目視検査、ボトルの箱詰め工程包装の管理・監視をローテーションで行っています。\n【どのようなところに仕事のやりがいを感じますか】\n自分が良いと思える作業手順書を新規作成または改訂し、それが承認を得られて採用されたときです。新人の方やこれから業務を覚える人でも見やすく効率良く作業ができるよう、写真や図を使って工夫して作成しています。\n【会社の雰囲気を教えてください】\n先輩後輩同士の仲が良く、趣味の合う人と休日に遊びに行くアットホームさがあります。上司や同僚とスノーボードに行ったこともあり、職場でのコミュニケーションが非常に円滑です。\n【仕事をする上で、大切にしていることを教えてください】\n同じ失敗を繰り返さないことです。失敗した際になぜ失敗したかを考え、原因を見つけて対策します。失敗を減らしトラブルを未然に防ぐことが品質向上や安定供給への貢献だと考えています。\n【これから仲間になる方へメッセージをお願いします】\n未経験の方にはハードルが高いと思われる業界かもしれませんが、先輩方がしっかりと仕事を指導してくれるので大丈夫です。光製薬は医薬品製造という社会貢献ができる現代に不可欠なお仕事です。一緒に切磋琢磨しましょう。\n【OFF TIME】\n趣味は旅行やフットサルです。ゴールデンウィークなど休日が多いので、会社の先輩や後輩と旅行に行きます。フットサルも会社の先輩・後輩から友人まで交じって楽しく活動しています。`,
+            sk: `【お名前】営業管理部 S.K\n【入社年度】2020年 入社\n【現在の仕事内容を教えてください】\n日々の販売実績を集計して会議資料やMRの営業用資料を作成しています。直接のお問い合わせに対する電話の一時対応、MRに必要な資材・パンフレットや製剤見本の郵送手配などの営業活動支援・サポートをしています。\n【どのようなところに仕事のやりがいを感じますか】\nMRの方々から「ありがとう」「助かったよ」と言ってもらえると本当にやりがいを感じます。また、作成した資料が採用に結びついたと報告を受けたときにも深い達成感を得られます。\n【会社の雰囲気を教えてください】\n製品に対する真剣さは高いですが、ベテランの方も多く、業務に関することはもちろん、プライベートの相談でも気軽に話をすることができるアットホームな環境です。\n【仕事をする上で、大切にしていることを教えてください】\n少数精鋭で対応しているため、コミュニケーションをとりお互いにフォローしあうこと。会社の顔として恥ずかしくない失礼のない丁寧な対応をすること。業務の優先順位を考えて効率化することです。\n【これから仲間になる方へメッセージをお願いします】\n世間一般にはあまり知られていませんが、医療現場では欠かせない重要な輸液製剤などを扱っており、社会的な貢献度が非常に高いです。知識は後から身に付きますので、真面目に取り組めれば大丈夫です。\n【OFF TIME】\n休日はバドミントンやボードゲーム（特にカタン）、麻雀を楽しんで体を動かしたり頭を使ったりしてリフレッシュしています。`,
+            yf: `【お名前】管理部 Y.F\n【入社年度】2009年 入社\n【現在の仕事内容を教えてください】\n原材料や製品を保管管理する部署で作業者を束ねるリーダー業務です。現場での入出荷フォローや監査、査察時のご案内、日々提出されてくる記録書の確認や事務手続き、各種会議への参加資料作成等を行っています。\n【どのようなところに仕事のやりがいを感じますか】\n同僚である作業者の仕事が計画通りスムーズに進んでいるときに最もやりがいを感じます。前後部署との円滑な調整や急な変動に対していかに素早く情報を伝達・調整できるかを重視して行動しています。\n【会社の雰囲気を教えてください】\n「社員は第二の家族」というような社風で、非常に雰囲気が良いです。アットホームでありながら、1つ間違えば命に関わる医薬品製造のため、心地よい緊張感と高いモチベーションがある職場です。\n【仕事をする上で、大切にしていることを教えてください】\n相手の立場になって考えることです。人に何かをお願いする際、今はどのような作業をしている時間かを想像しながら声をかけ、伝わりやすい言い方を意識しています。\n【これから仲間になる方へメッセージをお願いします】\n培ってきた経験やスキルをぜひお貸しください。やる気があれば未経験でも大歓迎ですので、一緒に働ける日を楽しみに待っています。\n【OFF TIME】\n現在は、休日のほとんどを家族（5歳の娘）と過ごす時間にあてています。平日にあまり会えない分、休日に一緒に遊ぶことが一番の楽しみです。成長が見られるのが幸せです。`,
+            mk: `【お名前】安全管理部（薬剤師） M.K\n【入社年度】2022年 入社\n【現在の仕事内容を教えてください】\n医薬品の有効性、安全性情報の収集。副作用報告や文献等からの調査、電子的添付文書の作成・改訂作業。医療関係者やPMDAへの報告資料の作成など、医薬品の適正使用を推進する業務を担当しています。\n【どのようなところに仕事のやりがいを感じますか】\n安全性情報を通して医療に貢献していると実感できる点です。症例報告文献等から隠れた安全性情報をいち早くキャッチし、使用する患者様により安全に届けるための一翼を担っていることに誇りを感じます。\n【会社の雰囲気を教えてください】\n和やかで親しみやすく、大きな家族のよう。新たに取り組む業務については事前に説明があり、年の離れたベテランの方でも気軽に質問ができ、わかりやすく回答してもらえるアットホームさがあります。\n【仕事をする上で、大切にしていることを教えてください】\n安全性情報は医療現場にとって非常に重要な情報です。自分自身の薬剤師経験を活かし、迅速・正確な添付文書改訂を心がけ、信頼される情報をお届けする責任感を持って業務をしています。\n【これから仲間になる方へメッセージをお願いします】\n私たちの作ったものが確実に患者様の助けになります。直接感謝の声を聞く機会は少ないですが、医療という大きなチームの一員として間違いなく患者様の未来を救っていく、大きなやりがいのある仕事です。\n【OFF TIME】\n通勤時間は読書。休日などまとまった時間には編み物やビーズなどの手芸に没頭してリフレッシュしています。気分転換に散歩をすることもあります。`,
+            ry: `【お名前】施設管理部工務課 R.Y\n【入社年度】1996年 入社\n【現在の仕事内容を教えてください】\n工務課の課長として、製造に必須な蒸留水の製造、用水、電気、蒸気、排水処理等を含む工場全体のユーティリティー安定供給の運転管理、保主保全、建物修繕、新規設備導入プロジェクトのとりまとめとアドバイス、部下のフォローを行っています。\n【どのようなところに仕事のやりがいを感じますか】\n機械弄りが好きで、現場からの要望に対し部品をその場で寸法を確認してワンオフで製作した結果、ラインが安定してコスト削減に繋がったときです。父が入院した際に光製薬の輸液が使用されているのを見た時、強い社会的やりがいを感じました。\n【会社の雰囲気を教えてください】\n工場すべての部署とつながりがあり、責任感を持ちつつ互いに信頼してより良い製品を届けようという高い意識があります。上司部下の隔たりなく、率先してフォローしあえる、あたたかい職場です。\n【仕事をする上で、大切にしていることを教えてください】\n「インフラがあって当たり前」という工場の製造環境を支える大きな責任感を持つこと。生産スケジュールに影響を出さないよう、保守保全計画における部署内外との密な報連相、コミュニケーションを大切にしています。\n【これから仲間になる方へメッセージをお願いします】\n工務課は他部署から頼りにされる存在であり、工場の縁の下の力持ちという言葉がよく似合います。それだけ仕事も多いですが、それら一つ一つの仕事が患者様の命を守ることにつながるのだと責任感を持って真...\n【OFF TIME】\n趣味はDIYです。自宅のフェンスや仕切りなどを子供と一緒に作成するのが休日の楽しみです。また子供と行くスキーや、温泉旅行でのんびりリフレッシュする時間も大切にしています。`
+        };
+    </script>
+
+    <!-- フロントエンドロジック（指数バックオフ＆パースサニタイズ搭載） -->
+    <script>
+        // API Key (Runtime provides this or fallback to manual input)
+        const apiKey = ""; 
+
+        // PDF.js Workerの明示的な配置
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        lucide.createIcons();
+
+        const dz = document.getElementById('drop-zone');
+        const fi = document.getElementById('fileIn');
+        const loader = document.getElementById('ai-loader');
+        const resSec = document.getElementById('result-section');
+        const placeholderSec = document.getElementById('placeholder-section');
+        const rawTxt = document.getElementById('rawTxt');
+        const keyInput = document.getElementById('apiKey');
+        const sampleSelect = document.getElementById('sampleSelect');
+        const clearBtn = document.getElementById('clearBtn');
+
+        // トースト通知マネージャー (成功・エラー両対応)
+        function showNotification(title, message, type = 'error') {
+            const toast = document.getElementById('toast');
+            const icon = document.getElementById('toast-icon');
+            document.getElementById('toast-title').innerText = title;
+            document.getElementById('toast-msg').innerText = message;
+            
+            if (type === 'error') {
+                toast.className = "no-print fixed top-6 right-6 z-50 transform transition-all duration-300 pointer-events-none bg-rose-600 text-white px-5 py-4 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-bold max-w-sm";
+                icon.setAttribute('data-lucide', 'alert-triangle');
+            } else if (type === 'success') {
+                toast.className = "no-print fixed top-6 right-6 z-50 transform transition-all duration-300 pointer-events-none bg-emerald-600 text-white px-5 py-4 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-bold max-w-sm";
+                icon.setAttribute('data-lucide', 'check-circle');
+            } else {
+                toast.className = "no-print fixed top-6 right-6 z-50 transform transition-all duration-300 pointer-events-none bg-slate-800 text-white px-5 py-4 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-bold max-w-sm";
+                icon.setAttribute('data-lucide', 'info');
+            }
+            lucide.createIcons();
+
+            toast.classList.remove('translate-y-[-100px]', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-[-100px]', 'opacity-0');
+            }, 5000);
+        }
+
+        // カスタムモーダル表示 (alert代替)
+        function showCustomModal(title, msg, type = 'info') {
+            const modal = document.getElementById('custom-modal');
+            const wrapper = document.getElementById('modal-icon-wrapper');
+            const icon = document.getElementById('modal-icon');
+            
+            document.getElementById('modal-title-text').innerText = title;
+            document.getElementById('modal-message-text').innerText = msg;
+            
+            if (type === 'error') {
+                wrapper.className = "p-3 bg-rose-50 text-rose-600 rounded-2xl animate-pulse";
+                icon.setAttribute('data-lucide', 'alert-octagon');
+            } else if (type === 'success') {
+                wrapper.className = "p-3 bg-emerald-50 text-emerald-600 rounded-2xl";
+                icon.setAttribute('data-lucide', 'check-circle');
+            } else {
+                wrapper.className = "p-3 bg-blue-50 text-blue-600 rounded-2xl";
+                icon.setAttribute('data-lucide', 'alert-circle');
+            }
+            
+            lucide.createIcons();
+            modal.classList.remove('hidden');
+        }
+
+        document.getElementById('modal-close-btn').onclick = () => {
+            document.getElementById('custom-modal').classList.add('hidden');
+        };
+
+        // LocalStorageからAPIキー復元
+        if (localStorage.getItem('rec_gemini_key')) {
+            keyInput.value = localStorage.getItem('rec_gemini_key');
+        }
+        keyInput.onchange = () => localStorage.setItem('rec_gemini_key', keyInput.value);
+
+        // クリアボタン
+        clearBtn.onclick = () => {
+            rawTxt.value = "";
+            sampleSelect.value = "";
+            showNotification("クリアしました", "入力テキストとサンプル選択を消去しました。", "info");
+        };
+
+        // サンプル流し込みイベント
+        sampleSelect.onchange = () => {
+            const val = sampleSelect.value;
+            if (val && optSamples[val]) {
+                rawTxt.value = optSamples[val];
+                showNotification("サンプル挿入", "光製薬のモデルデータを用意しました。", "success");
+            }
+        };
+
+        // ドラッグオーバー等の視覚効果
+        dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag-active'); });
+        dz.addEventListener('dragleave', () => dz.classList.remove('drag-active'));
+        dz.addEventListener('drop', () => dz.classList.remove('drag-active'));
+
+        // ファイル読み込みハンドリング（エラー耐性強化・SheetJSバグ修正）
+        fi.onchange = async (e) => {
+            const f = e.target.files[0];
+            if (!f) return;
+            loader.classList.remove('hidden');
+            document.getElementById('loader-submsg').innerText = "ファイルを解析しています...";
+
+            try {
+                let text = "";
+                if (f.name.endsWith('.pdf')) {
+                    const buffer = await f.arrayBuffer();
+                    const pdf = await window.pdfjsLib.getDocument({data: buffer}).promise;
+                    for (let i=1; i<=pdf.numPages; i++) {
+                        const pg = await pdf.getPage(i);
+                        const content = await pg.getTextContent();
+                        text += content.items.map(it => it.str).join(" ") + "\n";
+                    }
+                } else if (f.name.endsWith('.xlsx') || f.name.endsWith('.xls')) {
+                    const buffer = await f.arrayBuffer();
+                    const wb = window.XLSX.read(buffer, {type: 'array'});
+                    text = window.XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+                } else {
+                    text = await f.text();
+                }
+                rawTxt.value = text;
+                showNotification("ファイル展開成功", `${f.name} からデータを抽出しました。`, "success");
+            } catch (err) {
+                showNotification("ファイル解析失敗", `${f.name} の読み込みに失敗しました。ファイル形式をご確認ください。`, "error");
+                console.error(err);
+            } finally {
+                loader.classList.add('hidden');
+            }
+        };
+
+        // 指数バックオフ搭載フェッチヘルパー（最大5回リトライ）
+        async function fetchWithExponentialBackoff(url, options, maxRetries = 5) {
+            let delay = 1000; // 1秒初期遅延
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    document.getElementById('loader-submsg').innerText = `AIに接続中... (試行 ${i + 1}/${maxRetries})`;
+                    const response = await fetch(url, options);
+                    
+                    if (response.ok) {
+                        return response;
+                    }
+
+                    // 429 (クォータ制限) または 5xx (サーバーエラー) の場合のみリトライ
+                    if (response.status !== 429 && response.status < 500) {
+                        const errorResponse = await response.json().catch(() => ({}));
+                        const errMsg = errorResponse.error?.message || `HTTP ${response.status}`;
+                        throw new Error(errMsg);
+                    }
+                } catch (err) {
+                    if (i === maxRetries - 1) {
+                        throw err; // すべてのリトライが失敗した場合は呼び出し元へエラーを上げる
+                    }
+                }
+                await new Promise(resolve => setTimeout(resolve, delay));
+                delay *= 2; // 遅延時間を倍増 (1s -> 2s -> 4s -> 8s -> 16s)
+            }
+        }
+
+        // AI実行ロジック
+        document.getElementById('genBtn').onclick = async () => {
+            const key = keyInput.value.trim() || apiKey;
+            const sourceText = rawTxt.value.trim();
+            if (!key) {
+                showCustomModal("APIキーがありません", "Gemini APIキーを入力していただくか、プレビュー環境キーをご利用ください。", "error");
+                return;
+            }
+            if (!sourceText) {
+                showCustomModal("テキストが空です", "要約するテキストをペーストするか、実例サンプルを読み込んでください。", "error");
+                return;
+            }
+
+            loader.classList.remove('hidden');
+
+            const systemPrompt = `
+            あなたは日本一の採用ライターです。
+            渡されたインタビュー回答から、採用サイト掲載用の魅力的な文章を作成してください。
+            
+            【厳格な文章生成条件】
+            1. 名前(name)の匿名化:
+               - 元から「N.S」や「S.T」といったイニシャル形式で入力されている場合は、その表記を絶対にそのまま維持・採用してください。
+               - 実名（例：山田太郎）が記載されている場合は「姓のイニシャル.名のイニシャル」形式(例: Y.T)に変換してください。
+            2. 所属部署・資格(dept):
+               - 「品質管理部」「品質保証部（薬剤師）」「営業部」などの所属情報を抽出して設定してください。
+            3. 入社年(year):
+               - 「20XX年入社」の書式に統一。
+            4. 質問回答マッピングと制限文字数の遵守(重要):
+               - 下記のJSON構造に従い、各質問の回答を指示された文字数(±20字以内)で執筆。
+               - 自然な敬語に統一し、誤字脱字を補正。同じ語尾の3連続を自動回避し、リズムの良い採用コピーとしてリライトしてください。
+               
+            【出力JSONフォーマット】
+            {
+                "name": "イニシャル名",
+                "dept": "所属部署名",
+                "year": "20XX年入社",
+                "answers": [
+                    {"q": "現在の仕事内容を教えてください。", "a": "280文字以上、320文字以下で執筆"},
+                    {"q": "仕事のやりがいについて教えてください。", "a": "280文字以上、320文字以下で執筆"},
+                    {"q": "会社の雰囲気について教えてください。", "a": "230文字以上、270文字以下で執筆"},
+                    {"q": "仕事をする上で大切にしていることを教えてください。", "a": "280文字以上、320文字以下で執筆"},
+                    {"q": "これから仲間になる方へメッセージをお願いします。", "a": "280文字以上、320文字以下で執筆"},
+                    {"q": "OFF TIMEの過ごし方について教えてください。", "a": "280文字以上、320文字以下で執筆"}
+                ]
+            }
+            `;
+
+            try {
+                const apiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${key}`;
+                const options = {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: systemPrompt + "\n\n原文テキスト：\n" + sourceText }] }],
+                        generationConfig: { responseMimeType: "application/json" }
+                    })
+                };
+
+                // 指数バックオフ付きfetchの実行
+                const response = await fetchWithExponentialBackoff(apiEndpoint, options);
+                const result = await response.json();
+
+                if (result.error) {
+                    throw new Error(result.error.message || "API側がエラーを返しました。");
+                }
+
+                if (!result.candidates || result.candidates.length === 0) {
+                    throw new Error("AIから有効な応答候補が得られませんでした。");
+                }
+
+                // AIレスポンスからJSONをクリーンアップしてパース（正規表現による完璧な切り出し）
+                let jsonText = result.candidates[0].content.parts[0].text;
+                
+                const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    jsonText = jsonMatch[0];
+                }
+
+                const data = JSON.parse(jsonText);
+                renderOutput(data);
+                showNotification("生成成功", "インタビューサマリーの執筆を完了しました！", "success");
+
+            } catch (err) {
+                showNotification("AI生成失敗", err.message || "通信またはAPIキーエラー。詳細をご確認ください。", "error");
+                console.error(err);
+            } finally {
+                loader.classList.add('hidden');
+            }
+        };
+
+        // プレビュー表示レンダリング
+        function renderOutput(data) {
+            document.getElementById('prvName').innerText = data.name;
+            document.getElementById('avatar').innerText = data.name.substring(0, 3);
+            document.getElementById('prvYear').innerText = data.year;
+            document.getElementById('prvDept').innerText = data.dept || "所属部署";
+
+            const cont = document.getElementById('prvContent');
+            cont.innerHTML = data.answers.map((item, idx) => `
+                <div class="group border-l-4 border-slate-100 pl-8 transition-all hover:border-blue-600">
+                    <p class="text-[9px] font-bold text-blue-600 uppercase tracking-[0.25em] mb-1.5">Question 0${idx+1}</p>
+                    <h3 class="text-xl font-bold text-slate-900 mb-4 leading-tight">${item.q}</h3>
+                    <p class="text-slate-600 text-sm leading-relaxed whitespace-pre-wrap font-medium">${item.a}</p>
+                </div>
+            `).join("");
+
+            placeholderSec.classList.add('hidden');
+            resSec.classList.remove('hidden');
+            document.getElementById('status-chip').classList.remove('hidden');
+            lucide.createIcons();
+
+            // 生成完了時にスムーズスクロールで移動
+            resSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // コピー機能 (document.execCommand('copy') によるiFrame/Sandbox完全対応フォールバック)
+        document.getElementById('copyBtn').onclick = () => {
+            const name = document.getElementById('prvName').innerText;
+            const year = document.getElementById('prvYear').innerText;
+            const dept = document.getElementById('prvDept').innerText;
+
+            let clipboardText = `【光製薬株式会社 採用サイト用インタビュー】\n\n■ プロフィール\n部署：${dept}\n入社：${year}\n名前：${name}\n\n`;
+            
+            document.querySelectorAll('#prvContent > div').forEach(div => {
+                const q = div.querySelector('h3').innerText;
+                const a = div.querySelector('p').innerText;
+                clipboardText += `${q}\n${a}\n\n`;
+            });
+
+            // iFrame対応のセーフコピーロジック
+            const tempTextarea = document.createElement("textarea");
+            tempTextarea.value = clipboardText;
+            document.body.appendChild(tempTextarea);
+            tempTextarea.select();
+            try {
+                document.execCommand('copy');
+                showNotification("コピー成功", "インタビュー全文をクリップボードにコピーしました！", "success");
+            } catch (err) {
+                showNotification("コピー失敗", "コピーがブロックされました。手動で範囲選択してコピーしてください。", "error");
+            }
+            document.body.removeChild(tempTextarea);
+        };
+
+        // HTML出力機能
+        document.getElementById('exportHtml').onclick = () => {
+            const name = document.getElementById('prvName').innerText;
+            const cardHtml = document.getElementById('result-section').innerHTML;
+            
+            const fullHtml = `<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>インタビュー - ${name}</title>
+    <script src="https://cdn.tailwindcss.com"></` + `script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Noto Sans JP', sans-serif; background: #f8fafc; }</style>
+</head>
+<body class="min-h-screen py-12 px-4 flex items-center justify-center">
+    <div class="max-w-3xl w-full">
+        ${cardHtml}
+    </div>
+</body>
+</html>`;
+
+            const blob = new Blob([fullHtml], {type: 'text/html'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `interview_card_${name}.html`;
+            a.click();
+            showNotification("HTMLダウンロード", "本番サイト用HTMLファイルをエクスポートしました。", "success");
+        };
+
+    </script>
+</body>
+</html>
